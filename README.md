@@ -1,6 +1,6 @@
 Elephant.io
 ===========
-[![Build Status](https://travis-ci.org/edson-k/elephant.io.svg?branch=master)](https://travis-ci.org/edson-k/elephant.io)
+[![Build Status](https://app.travis-ci.com/edson-k/elephant.io.svg?branch=master)](https://travis-ci.org/edson-k/elephant.io)
 [![Latest Stable Version](https://poser.pugx.org/edson-k/elephant.io/v/stable.svg)](https://packagist.org/packages/edson-k/elephant.io)
 [![Total Downloads](https://poser.pugx.org/edson-k/elephant.io/downloads.svg)](https://packagist.org/packages/edson-k/elephant.io) 
 [![License](https://poser.pugx.org/edson-k/elephant.io/license.svg)](https://packagist.org/packages/edson-k/elephant.io)
