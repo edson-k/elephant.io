@@ -1,9 +1,9 @@
 Elephant.io
 ===========
-[![Build Status](https://travis-ci.org/Wisembly/elephant.io.svg?branch=master)](https://travis-ci.org/Wisembly/elephant.io)
-[![Latest Stable Version](https://poser.pugx.org/wisembly/elephant.io/v/stable.svg)](https://packagist.org/packages/wisembly/elephant.io)
-[![Total Downloads](https://poser.pugx.org/wisembly/elephant.io/downloads.svg)](https://packagist.org/packages/wisembly/elephant.io) 
-[![License](https://poser.pugx.org/wisembly/elephant.io/license.svg)](https://packagist.org/packages/wisembly/elephant.io)
+[![Build Status](https://travis-ci.org/edson-k/elephant.io.svg?branch=master)](https://travis-ci.org/edson-k/elephant.io)
+[![Latest Stable Version](https://poser.pugx.org/edson-k/elephant.io/v/stable.svg)](https://packagist.org/packages/edson-k/elephant.io)
+[![Total Downloads](https://poser.pugx.org/edson-k/elephant.io/downloads.svg)](https://packagist.org/packages/edson-k/elephant.io) 
+[![License](https://poser.pugx.org/edson-k/elephant.io/license.svg)](https://packagist.org/packages/edson-k/elephant.io)
 
 ```
         ___     _,.--.,_         Elephant.io is a rough websocket client
@@ -28,11 +28,11 @@ issue #135 !
 
 Installation
 ============
-We are suggesting you to use composer, with the following : `php composer.phar require wisembly/elephant.io`. For other ways, you can check the release page, or the git clone urls.
+We are suggesting you to use composer, with the following : `php composer.phar require edson-k/elephant.io`. For other ways, you can check the release page, or the git clone urls.
 
 Documentation
 =============
-The docs are not written yet, but you should check [the example directory](https://github.com/Wisembly/elephant.io/tree/master/example)
+The docs are not written yet, but you should check [the example directory](https://github.com/edson-k/elephant.io/tree/master/example)
 to get a basic knowledge on how this library is meant to work.
 
 Special Thanks
