@@ -1,6 +1,6 @@
 # Elephant.io
 
-![Build Status](https://github.com/ElephantIO/elephant.io/actions/workflows/continuous-integration.yml/badge.svg)
+![Build Status](https://github.com/edson-k/elephant.io/actions/workflows/continuous-integration.yml/badge.svg)
 [![Latest Stable Version](https://poser.pugx.org/edson-k/elephant.io/v/stable.svg)](https://packagist.org/packages/edson-k/elephant.io)
 [![Total Downloads](https://poser.pugx.org/edson-k/elephant.io/downloads.svg)](https://packagist.org/packages/edson-k/elephant.io)
 [![License](https://poser.pugx.org/elephantio/elephant.io/license.svg)](https://packagist.org/packages/elephantio/elephant.io)
