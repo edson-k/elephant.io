@@ -12,13 +12,8 @@
 
 namespace ElephantIO\Exception;
 
-use Exception;
-use InvalidArgumentException;
+use RuntimeException;
 
-class MalformedUrlException extends InvalidArgumentException
+class UnsuccessfulOperationException extends RuntimeException
 {
-    public function __construct($url, Exception $previous = null)
-    {
-        parent::__construct(\sprintf('The url "%s" seems to be malformed', $url), 0, $previous);
-    }
 }

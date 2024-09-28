@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the Elephant.io package
  *
@@ -9,11 +10,11 @@
  * @license   http://www.opensource.org/licenses/MIT-License MIT License
  */
 
-namespace ElephantIO\Payload;
+namespace ElephantIO\Test\Payload;
 
-use ReflectionProperty;
-
+use ElephantIO\Payload\Encoder;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
 
 class EncoderTest extends TestCase
 {
@@ -23,7 +24,7 @@ class EncoderTest extends TestCase
         $encoder = new Encoder('foo', Encoder::OPCODE_TEXT, null !== $maskKey);
 
         if (null !== $maskKey) {
-            $refl = new ReflectionProperty('ElephantIO\\AbstractPayload', 'maskKey');
+            $refl = new ReflectionProperty('ElephantIO\\Payload', 'maskKey');
             $refl->setAccessible(true);
             $refl->setValue($encoder, $maskKey);
         }
@@ -34,7 +35,7 @@ class EncoderTest extends TestCase
     public function providerShortPayload()
     {
         return [[null, '8103666f6f'],
-                ['?EV!', '81833f455621592a39']];
+            ['?EV!', '81833f455621592a39']];
     }
 
     /**
@@ -44,18 +45,17 @@ class EncoderTest extends TestCase
      */
     public function testLongPayload($maskKey, $expected)
     {
-        $payload = <<<'PAYLOAD'
+        $payload = <<<EOF
 This payload length is over 125 chars, hence the length part inside the payload
 should now be 16 bits in length. There are still a little bit less than that to
 satisfy the fact that we need more than 125 characters, but less than 65536. So
 this should do the trick...
-PAYLOAD
-;
+EOF;
 
-        $encoder = new Encoder($payload, Encoder::OPCODE_TEXT, null !== $maskKey);
+        $encoder = new Encoder($this->fixEol($payload), Encoder::OPCODE_TEXT, null !== $maskKey);
 
         if (null !== $maskKey) {
-            $refl = new ReflectionProperty('ElephantIO\\AbstractPayload', 'maskKey');
+            $refl = new ReflectionProperty('ElephantIO\\Payload', 'maskKey');
             $refl->setAccessible(true);
             $refl->setValue($encoder, $maskKey);
         }
@@ -65,7 +65,7 @@ PAYLOAD
 
     public function providerLongPayload()
     {
-        $noMask   = '817e010b54686973207061796c6f6164206c656e677468206973206f76'
+        $noMask = '817e010b54686973207061796c6f6164206c656e677468206973206f76'
                   . '6572203132352063686172732c2068656e636520746865206c656e6774'
                   . '68207061727420696e7369646520746865207061796c6f61640a73686f'
                   . '756c64206e6f77206265203136206269747320696e206c656e6774682e'
@@ -88,7 +88,15 @@ PAYLOAD
                   . '2a7655572076554d2c354a116b78';
 
         return [[null, $noMask],
-                ['?EV!', $withMask]];
+            ['?EV!', $withMask]];
+    }
+
+    private function fixEol($str, $from = "\r\n", $to = "\n")
+    {
+        if (false !== strpos($str, $from)) {
+            $str = str_replace($from, $to, $str);
+        }
+
+        return $str;
     }
 }
-

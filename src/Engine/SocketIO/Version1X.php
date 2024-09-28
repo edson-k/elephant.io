@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the Elephant.io package
  *
@@ -11,132 +12,43 @@
 
 namespace ElephantIO\Engine\SocketIO;
 
-use InvalidArgumentException;
-use UnexpectedValueException;
-
-use ElephantIO\EngineInterface;
-use ElephantIO\Payload\Encoder;
-use ElephantIO\Engine\AbstractSocketIO;
-
-use ElephantIO\Exception\SocketException;
-use ElephantIO\Exception\UnsupportedTransportException;
+use ElephantIO\Engine\SocketIO;
 use ElephantIO\Exception\ServerConnectionFailureException;
+use ElephantIO\Exception\UnsuccessfulOperationException;
+use ElephantIO\Payload\Encoder;
+use ElephantIO\SequenceReader;
+use ElephantIO\Util;
+use ElephantIO\Yeast;
+use InvalidArgumentException;
+use RuntimeException;
 
 /**
- * Implements the dialog with Socket.IO version 1.x
+ * Implements the dialog with socket.io server 1.x.
  *
  * Based on the work of Mathieu Lallemand (@lalmat)
  *
  * @author Baptiste Clavié <baptiste@wisembly.com>
  * @link https://tools.ietf.org/html/rfc6455#section-5.2 Websocket's RFC
  */
-class Version1X extends AbstractSocketIO
+class Version1X extends SocketIO
 {
-    const TRANSPORT_POLLING   = 'polling';
-    const TRANSPORT_WEBSOCKET = 'websocket';
+    public const PROTO_OPEN = 0;
+    public const PROTO_CLOSE = 1;
+    public const PROTO_PING = 2;
+    public const PROTO_PONG = 3;
+    public const PROTO_MESSAGE = 4;
+    public const PROTO_UPGRADE = 5;
+    public const PROTO_NOOP = 6;
 
-    /** {@inheritDoc} */
-    public function connect()
-    {
-        if (\is_resource($this->stream)) {
-            return;
-        }
+    public const PACKET_CONNECT = 0;
+    public const PACKET_DISCONNECT = 1;
+    public const PACKET_EVENT = 2;
+    public const PACKET_ACK = 3;
+    public const PACKET_ERROR = 4;
+    public const PACKET_BINARY_EVENT = 5;
+    public const PACKET_BINARY_ACK = 6;
 
-        $this->handshake();
-
-        $protocol = 'http';
-        $errors = [null, null];
-        $host   = \sprintf('%s:%d', $this->url['host'], $this->url['port']);
-
-        if (true === $this->url['secured']) {
-            $protocol = 'ssl';
-            $host = 'ssl://' . $host;
-        }
-
-        // add custom headers
-        if (isset($this->options['headers'])) {
-            $headers = isset($this->context[$protocol]['header']) ? $this->context[$protocol]['header'] : [];
-            $this->context[$protocol]['header'] = \array_merge($headers, $this->options['headers']);
-        }
-
-        $this->stream = \stream_socket_client(
-            $host,
-            $errors[0],
-            $errors[1],
-            $this->options['timeout'],
-            STREAM_CLIENT_CONNECT,
-            \stream_context_create($this->context)
-        );
-
-        if (!\is_resource($this->stream)) {
-            throw new SocketException($errors[0], $errors[1]);
-        }
-
-        \stream_set_timeout($this->stream, $this->options['timeout']);
-
-        $this->upgradeTransport();
-    }
-
-    /** {@inheritDoc} */
-    public function close()
-    {
-        if (!\is_resource($this->stream)) {
-            return;
-        }
-
-        $this->write(EngineInterface::CLOSE);
-
-        \fclose($this->stream);
-        $this->stream = null;
-        $this->session = null;
-        $this->cookies = [];
-    }
-
-    /** {@inheritDoc} */
-    public function emit($event, $args)
-    {
-        $this->keepAlive();
-        $namespace = $this->namespace;
-
-        if ('' !== $namespace) {
-            $namespace .= ',';
-        }
-
-        return $this->write(EngineInterface::MESSAGE, static::EVENT . $namespace . \json_encode([$event, $args]));
-    }
-
-    /** {@inheritDoc} */
-    public function of($namespace)
-    {
-        $this->keepAlive();
-        parent::of($namespace);
-
-        $this->write(EngineInterface::MESSAGE, static::CONNECT . $namespace);
-    }
-
-    /** {@inheritDoc} */
-    public function write($code, $message = null)
-    {
-        if (!\is_resource($this->stream)) {
-            return;
-        }
-
-        if (!\is_int($code) || 0 > $code || 6 < $code) {
-            throw new InvalidArgumentException('Wrong message type when trying to write on the socket');
-        }
-
-        $payload = new Encoder($code . $message, Encoder::OPCODE_TEXT, true);
-        $bytes = @\fwrite($this->stream, (string) $payload);
-
-        if ($bytes === false){
-            throw new \Exception("Message was not delivered");
-        }
-
-        // wait a little bit of time after this message was sent
-        \usleep((int) $this->options['wait']);
-
-        return $bytes;
-    }
+    public const SEPARATOR = "\x1e";
 
     /** {@inheritDoc} */
     public function getName()
@@ -147,171 +59,515 @@ class Version1X extends AbstractSocketIO
     /** {@inheritDoc} */
     protected function getDefaultOptions()
     {
-        $defaults = parent::getDefaultOptions();
-
-        $defaults['version']   = 2;
-        $defaults['use_b64']   = false;
-        $defaults['transport'] = static::TRANSPORT_POLLING;
-
-        return $defaults;
+        return [
+            'version' => 2,
+            'max_payload' => 10e7,
+        ];
     }
 
-    /** Does the handshake with the Socket.io server and populates the `session` value object */
-    protected function handshake()
+    /** {@inheritDoc} */
+    protected function processData($data)
+    {
+        // @see https://socket.io/docs/v4/engine-io-protocol/
+        /** @var \ElephantIO\Engine\Packet $result */
+        $result = null;
+        if ($this->transport === static::TRANSPORT_POLLING && false !== strpos($data, static::SEPARATOR)) {
+            $packets = explode(static::SEPARATOR, $data);
+        } else {
+            $packets = [$data];
+        }
+        while (count($packets)) {
+            $data = array_shift($packets);
+            $packet = $this->decodePacket($data);
+            if ($packet->proto === static::PROTO_MESSAGE &&
+                $packet->type === static::PACKET_BINARY_EVENT) {
+                $packet->type = static::PACKET_EVENT;
+                for ($i = 0; $i < $packet->count; $i++) {
+                    $bindata = null;
+                    switch ($this->transport) {
+                        case static::TRANSPORT_POLLING:
+                            $bindata = array_shift($packets);
+                            $prefix = substr($bindata, 0, 1);
+                            if ($prefix !== 'b') {
+                                throw new RuntimeException(sprintf('Unable to decode binary data with prefix "%s"!', $prefix));
+                            }
+                            $bindata = base64_decode(substr($bindata, 1));
+                            break;
+                        case static::TRANSPORT_WEBSOCKET:
+                            $bindata = (string) $this->_transport()->recv();
+                            break;
+                    }
+                    if (null === $bindata) {
+                        throw new RuntimeException(sprintf('Binary data unavailable for index %d!', $i));
+                    }
+                    $packet->data = $this->replaceAttachment($packet->data, $i, $bindata);
+                }
+            }
+            switch ($packet->proto) {
+                case static::PROTO_CLOSE:
+                    $this->logger->debug('Connection closed by server');
+                    $this->reset();
+                    throw new RuntimeException('Connection closed by server!');
+                case static::PROTO_PING:
+                    $this->logger->debug('Got PING, sending PONG');
+                    $this->send(static::PROTO_PONG);
+                    break;
+                case static::PROTO_PONG:
+                    $this->logger->debug('Got PONG');
+                    break;
+                case static::PROTO_NOOP:
+                    break;
+                default:
+                    if (null === $result) {
+                        $result = $packet;
+                    } else {
+                        $result->add($packet);
+                    }
+                    break;
+            }
+        }
+
+        return $result;
+    }
+
+    /** {@inheritDoc} */
+    protected function matchEvent($packet, $event)
+    {
+        if (($found = $packet->peek(static::PROTO_MESSAGE)) && $this->matchNamespace($found->nsp) && $found->event === $event) {
+            return $found;
+        }
+    }
+
+    /** {@inheritDoc} */
+    protected function createEvent($event, $args, $ack = null)
+    {
+        $attachments = [];
+        $this->getAttachments($args, $attachments);
+        $type = count($attachments) ? static::PACKET_BINARY_EVENT : static::PACKET_EVENT;
+        $data = ($ack ? $this->getAckId(true) : '') . json_encode([$event, $args]);
+        $data = Util::concatNamespace($this->namespace, $data);
+        if ($type === static::PACKET_BINARY_EVENT) {
+            $data = sprintf('%d-%s', count($attachments), $data);
+            $this->logger->debug(sprintf('Binary event arguments %s', Util::toStr($args)));
+        }
+
+        $raws = null;
+        if (count($attachments)) {
+            switch ($this->transport) {
+                case static::TRANSPORT_POLLING:
+                    foreach ($attachments as $attachment) {
+                        $data .= static::SEPARATOR;
+                        $data .= 'b' . base64_encode($attachment);
+                    }
+                    break;
+                case static::TRANSPORT_WEBSOCKET:
+                    $raws = [];
+                    /** @var \ElephantIO\Engine\Transport\Websocket $transport */
+                    $transport = $this->_transport();
+                    foreach ($attachments as $attachment) {
+                        $raws[] = $transport->getPayload($attachment, Encoder::OPCODE_BINARY);
+                    }
+                    break;
+            }
+        }
+
+        return [static::PROTO_MESSAGE, $type . $data, $raws];
+    }
+
+    /** {@inheritDoc} */
+    protected function matchAck($packet)
+    {
+        if (($found = $packet->peek(static::PROTO_MESSAGE)) &&
+            in_array($found->type, [static::PACKET_ACK, static::PACKET_BINARY_ACK]) &&
+            $this->matchNamespace($found->nsp) &&
+            $found->ack == $this->getAckId()) {
+            return $found;
+        }
+    }
+
+    /** {@inheritDoc} */
+    protected function createAck($packet, $data)
+    {
+        $type = $packet->count ? static::PACKET_BINARY_ACK : static::PACKET_ACK;
+        $data = Util::concatNamespace($this->namespace, $packet->ack . json_encode($data));
+
+        return [static::PROTO_MESSAGE, $type . $data];
+    }
+
+    /** {@inheritDoc} */
+    protected function getPacketMaps()
+    {
+        return [
+            'proto' => [
+                static::PROTO_CLOSE => 'close',
+                static::PROTO_OPEN => 'open',
+                static::PROTO_PING => 'ping',
+                static::PROTO_PONG => 'pong',
+                static::PROTO_MESSAGE => 'message',
+                static::PROTO_UPGRADE => 'upgrade',
+                static::PROTO_NOOP => 'noop',
+            ],
+            'type' => [
+                static::PACKET_CONNECT => 'connect',
+                static::PACKET_DISCONNECT => 'disconnect',
+                static::PACKET_EVENT => 'event',
+                static::PACKET_ACK => 'ack',
+                static::PACKET_ERROR => 'error',
+                static::PACKET_BINARY_EVENT => 'binary-event',
+                static::PACKET_BINARY_ACK => 'binary-ack',
+            ]
+        ];
+    }
+
+    /**
+     * Decode payload data.
+     *
+     * @param string $data
+     * @return \ElephantIO\Engine\Packet
+     */
+    protected function decodeData($data)
+    {
+        /** @var \ElephantIO\Engine\Packet $result */
+        $result = null;
+        $seq = new SequenceReader($data);
+        while (!$seq->isEof()) {
+            $len = null;
+            switch (true) {
+                case $this->options->version >= 4:
+                    $len = strlen($seq->getData());
+                    break;
+                case $this->options->version >= 3:
+                    $len = (int) $seq->readUntil(':');
+                    break;
+                case $this->options->version >= 2:
+                    $prefix = $seq->read();
+                    if (ord($prefix) === 0) {
+                        $len = 0;
+                        $sizes = $seq->readUntil("\xff");
+                        $n = strlen($sizes) - 1;
+                        for ($i = 0; $i <= $n; $i++) {
+                            $len += ord($sizes[$i]) * pow(10, $n - $i);
+                        }
+                    } else {
+                        throw new RuntimeException('Unsupported encoding detected!');
+                    }
+                    break;
+            }
+            if (null === $len) {
+                throw new RuntimeException('Data delimiter not found!');
+            }
+
+            $packet = $this->decodePacket($seq->read($len));
+            if (null === $result) {
+                $result = $packet;
+            } else {
+                $result->add($packet);
+            }
+        }
+
+        return $result;
+    }
+
+    /**
+     * Decode a packet.
+     *
+     * @param string $data
+     * @return \ElephantIO\Engine\Packet
+     */
+    protected function decodePacket($data)
+    {
+        $seq = new SequenceReader($data);
+        $proto = (int) $seq->read();
+        if ($proto >= static::PROTO_OPEN && $proto <= static::PROTO_NOOP) {
+            $packet = $this->createPacket($proto);
+            $packet->data = null;
+            switch ($packet->proto) {
+                case static::PROTO_OPEN:
+                    if (!$seq->isEof()) {
+                        $packet->data = json_decode($seq->getData(), true);
+                    }
+                    break;
+                case static::PROTO_MESSAGE:
+                    $packet->type = (int) $seq->read();
+                    if ($packet->type === static::PACKET_BINARY_EVENT) {
+                        $packet->count = (int) $seq->readUntil('-');
+                    }
+                    $openings = ['[', '{'];
+                    $stops = implode(array_merge([','], $openings));
+                    $packet->nsp = $seq->readUntil($stops, $openings);
+                    // check for ack
+                    if (!in_array(substr($seq->getData(), 0, 1), $openings)) {
+                        $packet->ack = $seq->readUntil(implode($openings), $openings);
+                    }
+                    if (null !== ($data = json_decode($seq->getData(), true))) {
+                        switch ($packet->type) {
+                            case static::PACKET_EVENT:
+                            case static::PACKET_BINARY_EVENT:
+                                $packet->event = array_shift($data);
+                                $packet->setArgs($data);
+                                break;
+                            case static::PACKET_ACK:
+                            case static::PACKET_BINARY_ACK:
+                                $packet->setArgs($data);
+                                break;
+                            default:
+                                $packet->data = $data;
+                                break;
+                        }
+                    }
+                    break;
+                default:
+                    if (!$seq->isEof()) {
+                        $packet->data = $seq->getData();
+                    }
+                    break;
+            }
+            $this->logger->info(sprintf('Got packet: %s', Util::truncate((string) $packet)));
+
+            return $packet;
+        }
+    }
+
+    /**
+     * Get attachment from packet data. A packet data considered as attachment
+     * if it's a resource and it has content.
+     *
+     * @param array $array
+     * @param array $result
+     */
+    protected function getAttachments(&$array, &$result)
+    {
+        if (is_array($array)) {
+            foreach ($array as &$value) {
+                if (is_resource($value)) {
+                    fseek($value, 0);
+                    if ($content = stream_get_contents($value)) {
+                        $idx = count($result);
+                        $result[] = $content;
+                        $value = ['_placeholder' => true, 'num' => $idx];
+                    } else {
+                        $value = null;
+                    }
+                }
+                if (is_array($value)) {
+                    $this->getAttachments($value, $result);
+                }
+            }
+        }
+    }
+
+    /**
+     * Replace binary attachment.
+     *
+     * @param array $array
+     * @param int $index
+     * @param string $data
+     * @return array
+     */
+    protected function replaceAttachment($array, $index, $data)
+    {
+        if (is_array($array)) {
+            foreach ($array as $key => &$value) {
+                if (is_array($value)) {
+                    if (isset($value['_placeholder']) && $value['_placeholder'] && $value['num'] === $index) {
+                        if ($this->options->binary_as_resource) {
+                            $value = Util::toResource($data);
+                        } else {
+                            $value = $data;
+                        }
+                        $this->logger->debug(sprintf('Replacing binary attachment for %d (%s)', $index, $key));
+                    } else {
+                        $value = $this->replaceAttachment($value, $index, $data);
+                    }
+                }
+            }
+        }
+
+        return $array;
+    }
+
+    /**
+     * Get authentication payload handshake.
+     *
+     * @return string
+     */
+    protected function getAuthPayload()
+    {
+        if (!isset($this->options->auth) || !$this->options->auth || $this->options->version < 4) {
+            return '';
+        }
+        if (($authData = json_encode($this->options->auth)) === false) {
+            throw new InvalidArgumentException(sprintf('Can\'t parse auth option JSON: %s!', json_last_error_msg()));
+        }
+
+        return $authData;
+    }
+
+    /**
+     * Get confirmed namespace result. Namespace is confirmed if the returned
+     * value is true, otherwise failed. If the return value is a string, it's
+     * indicated an error message.
+     *
+     * @param \ElephantIO\Engine\Packet $packet
+     * @return bool|string
+     */
+    protected function getConfirmedNamespace($packet)
+    {
+        if ($packet && $packet->proto === static::PROTO_MESSAGE) {
+            if ($packet->type === static::PACKET_CONNECT) {
+                return true;
+            }
+            if ($packet->type === static::PACKET_ERROR) {
+                return isset($packet->data['message']) ? $packet->data['message'] : false;
+            }
+        }
+    }
+
+    protected function isProtocol($proto)
+    {
+        if ($proto < static::PROTO_OPEN || $proto > static::PROTO_NOOP) {
+            throw new InvalidArgumentException('Wrong protocol type to sent to server');
+        }
+
+        return true;
+    }
+
+    protected function formatProtocol($proto, $data = null)
+    {
+        return $proto . $data;
+    }
+
+    public function buildQueryParameters($transport)
+    {
+        $parameters = [
+            'EIO' => $this->options->version,
+            'transport' => $transport ?? $this->transport,
+            't' => Yeast::yeast(),
+        ];
+        if ($this->session) {
+            $parameters['sid'] = $this->session->id;
+        }
+
+        return $parameters;
+    }
+
+    public function buildQuery($query)
+    {
+        $url = $this->stream->getUrl()->getParsed();
+        if (isset($url['query']) && $url['query']) {
+            $query = array_replace($query, $url['query']);
+        }
+
+        return sprintf('/%s/?%s', trim($url['path'], '/'), http_build_query($query));
+    }
+
+    protected function doHandshake()
     {
         if (null !== $this->session) {
             return;
         }
 
-        $query = ['use_b64'   => $this->options['use_b64'],
-                  'EIO'       => $this->options['version'],
-                  'transport' => $this->options['transport']];
+        $this->logger->info('Starting handshake');
 
-        if (isset($this->url['query'])) {
-            $query = \array_replace($query, $this->url['query']);
+        // set timeout to default
+        $this->setTimeout($this->defaults['timeout']);
+
+        /** @var \ElephantIO\Engine\Transport\Polling $transport */
+        $transport = $this->_transport();
+        if (null === ($data = $transport->recv(0, ['upgrade' => $this->transport === static::TRANSPORT_WEBSOCKET]))) {
+            throw new ServerConnectionFailureException('unable to perform handshake');
         }
 
-        $context = $this->context;
-        $protocol = true === $this->url['secured'] ? 'ssl' : 'http';
-
-        if (!isset($context[$protocol])) {
-            $context[$protocol] = [];
+        if ($this->transport === static::TRANSPORT_WEBSOCKET) {
+            $this->stream->upgrade();
+            $packet = $this->drain();
+        } else {
+            $packet = $this->decodeData($data);
         }
 
-        // add customer headers
-        if (isset($this->options['headers'])) {
-            $headers = isset($context['http']['header']) ? $context['http']['header'] : [];
-            $context['http']['header'] = array_merge($headers, $this->options['headers']);
+        $handshake = null;
+        if ($packet && ($packet = $packet->peek(static::PROTO_OPEN))) {
+            $handshake = $packet->data;
         }
-
-        $url    = \sprintf(
-            '%s://%s:%d/%s/?%s',
-            $this->url['scheme'],
-            $this->url['host'],
-            $this->url['port'],
-            \trim($this->url['path'], '/'),
-            \http_build_query($query)
-        );
-
-        $result = @\file_get_contents($url, false, \stream_context_create($context));
-
-        if (false === $result) {
-            $message = null;
-            $error = \error_get_last();
-
-            if (null !== $error && false !== \strpos($error['message'], 'file_get_contents()')) {
-                $message = $error['message'];
+        if (null === $handshake) {
+            throw new RuntimeException('Handshake is successful but without data!');
+        }
+        array_walk($handshake, function(&$value, $key) {
+            if (in_array($key, ['pingInterval', 'pingTimeout'])) {
+                $value /= 1000;
             }
+        });
+        $this->storeSession($handshake, $transport->getHeaders());
 
-            throw new ServerConnectionFailureException($message);
-        }
-
-        $open_curly_at = \strpos($result, '{');
-        $todecode = \substr($result, $open_curly_at, \strrpos($result, '}')-$open_curly_at+1);
-        $decoded = \json_decode($todecode, true);
-
-        if (!\in_array('websocket', $decoded['upgrades'])) {
-            throw new UnsupportedTransportException('websocket');
-        }
-
-        $cookies = [];
-        foreach ($http_response_header as $header) {
-            if (\preg_match('/^Set-Cookie:\s*([^;]*)/i', $header, $matches)) {
-                $cookies[] = $matches[1];
-            }
-        }
-        $this->cookies = $cookies;
-
-        $this->session = new Session(
-            $decoded['sid'],
-            $decoded['pingInterval'] / 1000,
-            $decoded['pingTimeout'] / 1000,
-            $decoded['upgrades']
-        );
+        $this->logger->info(sprintf('Handshake finished with %s', (string) $this->session));
     }
 
-    /**
-     * Upgrades the transport to WebSocket
-     *
-     * FYI:
-     * Version "2" is used for the EIO param by socket.io v1
-     * Version "3" is used by socket.io v2
-     */
-    protected function upgradeTransport()
+    protected function doAfterHandshake()
     {
-        $query = ['sid'       => $this->session->id,
-                  'EIO'       => $this->options['version'],
-                  'transport' => static::TRANSPORT_WEBSOCKET];
-
-        if ($this->options['version'] === 2) {
-            $query['use_b64'] = $this->options['use_b64'];
+        // connect to namespace for protocol version 4 and later
+        if ($this->options->version < 4) {
+            return;
         }
 
-        $url = \sprintf('/%s/?%s', \trim($this->url['path'], '/'), \http_build_query($query));
+        $this->logger->info('Starting namespace connect');
 
-        $hash = \sha1(\uniqid(\mt_rand(), true), true);
+        // set timeout based on handshake response
+        $this->setTimeout($this->session->getTimeout());
 
-        if ($this->options['version'] !== 2) {
-            $hash = \substr($hash, 0, 16);
-        }
+        $this->doChangeNamespace();
 
-        $key = \base64_encode($hash);
+        $this->logger->info('Namespace connect completed');
+    }
 
-        $origin = '*';
-        $headers = isset($this->context['headers']) ? (array) $this->context['headers'] : [] ;
+    protected function doUpgrade()
+    {
+        $this->logger->info('Starting websocket upgrade');
 
-        foreach ($headers as $header) {
-            $matches = [];
+        // set timeout based on handshake response
+        $this->setTimeout($this->session->getTimeout());
 
-            if (\preg_match('`^Origin:\s*(.+?)$`', $header, $matches)) {
-                $origin = $matches[1];
-                break;
+        if (null !== $this->_transport()->recv(0, ['transport' => static::TRANSPORT_WEBSOCKET, 'upgrade' => true])) {
+            $this->setTransport(static::TRANSPORT_WEBSOCKET);
+            $this->stream->upgrade();
+
+            $this->send(static::PROTO_UPGRADE);
+
+            // ensure got packet connect on socket.io 1.x
+            if ($this->options->version === 2 && $packet = $this->drain()) {
+                if ($packet->proto === static::PROTO_MESSAGE && $packet->type === static::PACKET_CONNECT) {
+                    $this->logger->debug('Upgrade successfully confirmed');
+                } else {
+                    $this->logger->debug('Upgrade not confirmed');
+                }
             }
-        }
 
-        $request = "GET {$url} HTTP/1.1\r\n"
-                 . "Host: {$this->url['host']}:{$this->url['port']}\r\n"
-                 . "Upgrade: WebSocket\r\n"
-                 . "Connection: Upgrade\r\n"
-                 . "Sec-WebSocket-Key: {$key}\r\n"
-                 . "Sec-WebSocket-Version: 13\r\n"
-                 . "Origin: {$origin}\r\n";
-
-        if (!empty($this->cookies)) {
-            $request .= "Cookie: " . \implode('; ', $this->cookies) . "\r\n";
-        }
-
-        $request .= "\r\n";
-
-        \fwrite($this->stream, $request);
-        $result = $this->readBytes(12);
-
-        if ('HTTP/1.1 101' !== $result) {
-            throw new UnexpectedValueException(
-                \sprintf('The server returned an unexpected value. Expected "HTTP/1.1 101", had "%s"', $result)
-            );
-        }
-
-        // cleaning up the stream
-        while ('' !== \trim(\fgets($this->stream)));
-
-        $this->write(EngineInterface::UPGRADE);
-
-        //remove message '40' from buffer, emmiting by socket.io after receiving EngineInterface::UPGRADE
-        if ($this->options['version'] === 2) {
-            if (stream_get_meta_data($this->stream)["unread_bytes"] !== 0) {
-                $this->read();
-            }
+            $this->logger->info('Websocket upgrade completed');
+        } else {
+            $this->logger->info('Upgrade failed, skipping websocket');
         }
     }
 
-    /**
-     * {@inheritDoc}
-     */
-    public function keepAlive()
+    protected function doChangeNamespace()
     {
-        if ($this->session->needsHeartbeat()) {
-            $this->write(static::PING);
+        if (!$this->session) {
+            throw new RuntimeException('To switch namespace, a session must has been established!');
         }
+
+        $this->send(static::PROTO_MESSAGE, static::PACKET_CONNECT . Util::concatNamespace($this->namespace, $this->getAuthPayload()));
+
+        $packet = $this->drain();
+        if (true === ($result = $this->getConfirmedNamespace($packet))) {
+            return $packet;
+        }
+        if (is_string($result)) {
+            throw new UnsuccessfulOperationException(sprintf('Unable to switch namespace: %s!', $result));
+        } else {
+            throw new UnsuccessfulOperationException('Unable to switch namespace!');
+        }
+    }
+
+    protected function doClose()
+    {
+        $this->send(static::PROTO_CLOSE);
     }
 }

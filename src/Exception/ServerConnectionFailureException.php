@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the Elephant.io package
  *
@@ -21,7 +22,7 @@ class ServerConnectionFailureException extends RuntimeException
 
     public function __construct($errorMessage, Exception $previous = null)
     {
-        parent::__construct('An error occurred while trying to establish a connection to the server', 0, $previous);
+        parent::__construct(sprintf('An error occurred while trying to establish a connection to the server, %s', $errorMessage), 0, $previous);
 
         $this->errorMessage = $errorMessage;
     }

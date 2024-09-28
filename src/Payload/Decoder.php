@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the Elephant.io package
  *
@@ -12,17 +13,16 @@
 namespace ElephantIO\Payload;
 
 use Countable;
-
-use ElephantIO\AbstractPayload;
+use ElephantIO\Payload;
 
 /**
- * Decode the payload from a received frame
+ * Decode the payload from a received frame.
  *
  * Based on the work of Byeoung Wook (@kbu1564) in #49
  *
  * @author Baptiste Clavié <baptiste@wisembly.com>
  */
-class Decoder extends AbstractPayload implements Countable
+class Decoder extends Payload implements Countable
 {
     private $payload;
     private $data;
@@ -45,7 +45,7 @@ class Decoder extends AbstractPayload implements Countable
 
         // if ($payload !== null) and ($payload packet error)?
         // invalid websocket packet data or not (text, binary opCode)
-        if (3 > $length) {
+        if (!$length) {
             return;
         }
 
@@ -54,22 +54,22 @@ class Decoder extends AbstractPayload implements Countable
         $this->fin = ($payload[0] >> 0b111);
 
         $this->rsv = [($payload[0] >> 0b110) & 0b1,  // rsv1
-                      ($payload[0] >> 0b101) & 0b1,  // rsv2
-                      ($payload[0] >> 0b100) & 0b1]; // rsv3
+            ($payload[0] >> 0b101) & 0b1,  // rsv2
+            ($payload[0] >> 0b100) & 0b1]; // rsv3
 
         $this->opCode = $payload[0] & 0xF;
-        $this->mask   = (bool) ($payload[1] >> 0b111);
+        $this->mask = (bool) ($payload[1] >> 0b111);
 
         $payloadOffset = 2;
 
         if ($length > 125) {
-            $payloadOffset = (0xFFFF < $length && 0xFFFFFFFF >= $length) ? 6 : 4;
+            $payloadOffset += (0xFFFF >= $length) ? 2 : 8;
         }
 
         $payload = \implode('', \array_map('chr', $payload));
 
         if (true === $this->mask) {
-            $this->maskKey  = \substr($payload, $payloadOffset, 4);
+            $this->maskKey = \substr($payload, $payloadOffset, 4);
             $payloadOffset += 4;
         }
 
@@ -82,7 +82,7 @@ class Decoder extends AbstractPayload implements Countable
         $this->data = $data;
     }
 
-    public function count()
+    public function count(): int
     {
         if (null === $this->payload) {
             return 0;
@@ -94,8 +94,8 @@ class Decoder extends AbstractPayload implements Countable
 
         $length = \ord($this->payload[1]) & 0x7F;
 
-        if ($length == 126 || $length == 127) {
-            $length = \unpack('H*', \substr($this->payload, 2, ($length == 126 ? 2 : 4)));
+        if ($length === 126 || $length === 127) {
+            $length = \unpack('H*', \substr($this->payload, 2, ($length === 126 ? 2 : 8)));
             $length = \hexdec($length[1]);
         }
 

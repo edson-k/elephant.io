@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the Elephant.io package
  *
@@ -9,11 +10,11 @@
  * @license   http://www.opensource.org/licenses/MIT-License MIT License
  */
 
-namespace ElephantIO\Payload;
+namespace ElephantIO\Test\Payload;
 
-use ReflectionProperty;
-
+use ElephantIO\Payload\Decoder;
 use PHPUnit\Framework\TestCase;
+use ReflectionProperty;
 
 class DecoderTest extends TestCase
 {
@@ -34,15 +35,15 @@ class DecoderTest extends TestCase
     public function providerUnmaskedPayload()
     {
         $short = 'foo';
-        $long  = <<<'PAYLOAD'
+        $long = <<<EOF
 This payload length is over 125 chars, hence the length part inside the payload
 should now be 16 bits in length. There are still a little bit less than that to
 satisfy the fact that we need more than 125 characters, but less than 65536. So
 this should do the trick...
-PAYLOAD;
+EOF;
 
         $shortMask = '8103666f6f';
-        $longMask  = '817e010b54686973207061796c6f6164206c656e677468206973206f76'
+        $longMask = '817e010b54686973207061796c6f6164206c656e677468206973206f76'
                    . '6572203132352063686172732c2068656e636520746865206c656e6774'
                    . '68207061727420696e7369646520746865207061796c6f61640a73686f'
                    . '756c64206e6f77206265203136206269747320696e206c656e6774682e'
@@ -54,7 +55,7 @@ PAYLOAD;
                    . '6520747269636b2e2e2e';
 
         return [[$shortMask, $short],
-                [$longMask, $long]];
+            [$longMask, $this->fixEol($long)]];
     }
 
     /**
@@ -77,17 +78,16 @@ PAYLOAD;
 
     public function providerMaskedPayload()
     {
-
         $short = 'foo';
-        $long  = <<<'PAYLOAD'
+        $long = <<<EOF
 This payload length is over 125 chars, hence the length part inside the payload
 should now be 16 bits in length. There are still a little bit less than that to
 satisfy the fact that we need more than 125 characters, but less than 65536. So
 this should do the trick...
-PAYLOAD;
+EOF;
 
         $shortMask = '81833f455621592a39';
-        $longMask  = '81fe010b3f4556216b2d3f521f353758532a37451f29334f58313e0156'
+        $longMask = '81fe010b3f4556216b2d3f521f353758532a37451f29334f58313e0156'
                    . '36764e492024010e7763015c2d37534c6976495a2b35441f313e441f29'
                    . '334f58313e014f2424551f2c3852562133014b2d33014f242f4d502432'
                    . '2b4c2d39545321764f503276435a6567171f273f554c653f4f1f29334f'
@@ -99,7 +99,7 @@ PAYLOAD;
                    . '2a7655572076554d2c354a116b78';
 
         return [[$shortMask, $short], // data encoded with < 125 characters
-                [$longMask, $long]];  // data encoded with > 125 characters but < 65536 characters
+            [$longMask, $this->fixEol($long)]];  // data encoded with > 125 characters but < 65536 characters
     }
 
     private function assertPropSame($expected, $object, $property)
@@ -109,5 +109,13 @@ PAYLOAD;
 
         $this->assertSame($expected, $refl->getValue($object));
     }
-}
 
+    private function fixEol($str, $from = "\r\n", $to = "\n")
+    {
+        if (false !== strpos($str, $from)) {
+            $str = str_replace($from, $to, $str);
+        }
+
+        return $str;
+    }
+}

@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the Elephant.io package
  *
@@ -12,8 +13,8 @@
 namespace ElephantIO\Exception;
 
 use BadMethodCallException;
-
-use ElephantIO\EngineInterface;
+use Exception;
+use ElephantIO\Engine\EngineInterface;
 
 class UnsupportedActionException extends BadMethodCallException
 {

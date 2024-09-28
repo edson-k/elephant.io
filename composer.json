@@ -1,15 +1,16 @@
 {
     "name": "edson-k/elephant.io",
     "type": "library",
-    "description": "Send events to a websocket real time engine though PHP",
+    "description": "Send events to a socket.io server through PHP",
     "keywords": [
         "Nodejs",
         "WebSocket",
         "Dialog",
-        "Real Time"
+        "Real Time",
+        "socket.io"
     ],
     "license": "MIT",
-    "homepage": "http://elephant.io",
+    "homepage": "https://elephantio.github.io/elephant.io/",
     "authors": [
         {
             "name": "Baptiste Clavié",
@@ -23,6 +24,11 @@
             "role": "Maintainer"
         },
         {
+            "name": "Toha",
+            "email": "tohenk@yahoo.com",
+            "role": "Maintainer"
+        },
+        {
             "name": "Ludovic Barreca",
             "email": "ludogp2@gmail.com",
             "role": "Project Founder"
@@ -32,12 +38,18 @@
             "role": "Contributors :)"
         }
     ],
+    "scripts": {
+        "test": "phpunit"
+    },
     "require": {
-        "php": ">=7.1.0",
-        "psr/log": "~1.0"
+        "php": ">=7.2",
+        "ext-mbstring": "*",
+        "psr/log": "^1.1 || ^3.0"
     },
     "require-dev": {
-        "phpunit/phpunit": "^8.0 || ^7.0"
+        "friendsofphp/php-cs-fixer": "^3.0",
+        "phpunit/phpunit": "^8.5 || ^9.5",
+        "monolog/monolog": "^2.8 || ^3.0"
     },
     "autoload": {
         "psr-4": {
@@ -48,9 +60,6 @@
         "psr-4": {
             "ElephantIO\\": "test/"
         }
-    },
-    "config": {
-        "bin-dir": "bin"
     },
     "minimum-stability": "dev",
     "prefer-stable": true

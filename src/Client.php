@@ -1,4 +1,5 @@
 <?php
+
 /**
  * This file is part of the Elephant.io package
  *
@@ -11,57 +12,75 @@
 
 namespace ElephantIO;
 
+use ElephantIO\Engine\EngineInterface;
+use ElephantIO\Engine\SocketIO\Version0X;
+use ElephantIO\Engine\SocketIO\Version1X;
+use ElephantIO\Engine\SocketIO\Version2X;
+use ElephantIO\Engine\SocketIO\Version3X;
+use ElephantIO\Engine\SocketIO\Version4X;
+use ElephantIO\Exception\SocketException;
+use InvalidArgumentException;
 use Psr\Log\NullLogger;
 use Psr\Log\LoggerInterface;
 
-use ElephantIO\Exception\SocketException;
-
 /**
- * Represents the IO Client which will send and receive the requests to the
- * websocket server. It basically suggercoat the Engine used with loggers.
+ * Represents socket.io client which will send and receive the requests to the
+ * socket.io server.
  *
  * @author Baptiste Clavié <baptiste@wisembly.com>
  */
 class Client
 {
-    /** @var EngineInterface */
+    public const CLIENT_0X = 0;
+    public const CLIENT_1X = 1;
+    public const CLIENT_2X = 2;
+    public const CLIENT_3X = 3;
+    public const CLIENT_4X = 4;
+
+    /** @var \ElephantIO\Engine\EngineInterface */
     private $engine;
 
-    /** @var LoggerInterface */
+    /** @var \Psr\Log\LoggerInterface */
     private $logger;
-
-    private $isConnected = false;
 
     public function __construct(EngineInterface $engine, LoggerInterface $logger = null)
     {
         $this->engine = $engine;
-        $this->logger = $logger ?: new NullLogger;
+        $this->logger = $logger ?: new NullLogger();
+        $this->engine->setLogger($this->logger);
     }
 
     public function __destruct()
     {
-        if (!$this->isConnected) {
-            return;
-        }
-
-        $this->close();
+        $this->disconnect();
     }
 
     /**
-     * Connects to the websocket
+     * Connect to server.
      *
-     * @return $this
+     * @deprecated Use connect() instead
+     * @return \ElephantIO\Client
      */
     public function initialize()
     {
-        try {
-            $this->logger->debug('Connecting to the websocket');
-            $this->engine->connect();
-            $this->logger->debug('Connected to the server');
+        trigger_error('initialize() will be removed soon, use connect() instead', E_USER_DEPRECATED);
 
-            $this->isConnected = true;
+        return $this->connect();
+    }
+
+    /**
+     * Connect to server.
+     *
+     * @return \ElephantIO\Client
+     */
+    public function connect()
+    {
+        try {
+            $this->logger->info('Connecting to server');
+            $this->engine->connect();
+            $this->logger->info('Connected to server');
         } catch (SocketException $e) {
-            $this->logger->error('Could not connect to the server', ['exception' => $e]);
+            $this->logger->error('Could not connect to server', ['exception' => $e]);
 
             throw $e;
         }
@@ -70,68 +89,159 @@ class Client
     }
 
     /**
-     * Reads a message from the socket
+     * Disconnect from server.
      *
-     * @return string Message read from the socket
-     */
-    public function read()
-    {
-        $this->logger->debug('Reading a new message from the socket');
-        return $this->engine->read();
-    }
-
-    /**
-     * Emits a message through the engine
-     *
-     * @param string $event
-     * @param array|string  $args
-     *
-     * @return $this
-     */
-    public function emit($event, $args)
-    {
-        $this->logger->debug('Sending a new message', ['event' => $event, 'args' => $args]);
-        $this->engine->emit($event, $args);
-
-        return $this;
-    }
-
-    /**
-     * Sets the namespace for the next messages
-     *
-     * @param string namespace the name of the namespace
-     * @return $this
-     */
-    public function of($namespace)
-    {
-        $this->logger->debug('Setting the namespace', ['namespace' => $namespace]);
-        $this->engine->of($namespace);
-
-        return $this;
-    }
-
-    /**
-     * Closes the connection
-     *
-     * @return $this
+     * @deprecated Use disconnect() instead
+     * @return \ElephantIO\Client
      */
     public function close()
     {
-        $this->logger->debug('Closing the connection to the websocket');
-        $this->engine->close();
+        trigger_error('close() will be removed soon, use disconnect() instead', E_USER_DEPRECATED);
 
-        $this->isConnected = false;
+        return $this->disconnect();
+    }
+
+    /**
+     * Disconnect from server.
+     *
+     * @return \ElephantIO\Client
+     */
+    public function disconnect()
+    {
+        if ($this->engine->connected()) {
+            $this->logger->info('Closing connection to server');
+            $this->engine->disconnect();
+        }
 
         return $this;
     }
 
     /**
-     * Gets the engine used, for more advanced functions
+     * Set socket namespace.
      *
-     * @return EngineInterface
+     * @param string $namespace The namespace
+     * @return \ElephantIO\Engine\Packet
+     */
+    public function of($namespace)
+    {
+        $this->logger->info('Setting namespace', ['namespace' => $namespace]);
+
+        return $this->engine->of($namespace);
+    }
+
+    /**
+     * Emit an event to server.
+     *
+     * @param string $event
+     * @param string|array $args
+     * @param bool $ack
+     * @return int|\ElephantIO\Engine\Packet Number of bytes written or acknowledged packet
+     */
+    public function emit($event, $args, $ack = null)
+    {
+        $this->logger->info('Emitting a new event', ['event' => $event, 'args' => Util::toStr($args)]);
+
+        return $this->engine->emit($event, $args, $ack);
+    }
+
+    /**
+     * Wait an event arrived from server.
+     *
+     * @param string $event
+     * @param float $timeout Timeout in seconds
+     * @return \ElephantIO\Engine\Packet
+     */
+    public function wait($event, $timeout = 0)
+    {
+        $this->logger->info('Waiting for event', ['event' => $event]);
+
+        return $this->engine->wait($event, $timeout);
+    }
+
+    /**
+     * Drain socket.
+     *
+     * @param float $timeout Timeout in seconds
+     * @return \ElephantIO\Engine\Packet
+     */
+    public function drain($timeout = 0)
+    {
+        return $this->engine->drain($timeout);
+    }
+
+    /**
+     * Acknowledge a packet.
+     *
+     * @param \ElephantIO\Engine\Packet $packet Packet to acknowledge
+     * @param array $args Acknowledgement data
+     * @return int Number of bytes written
+     */
+    public function ack($packet, array $args)
+    {
+        if (null !== $packet->ack) {
+            $this->logger->info(sprintf('Acknowledge a packet with id %s', $packet->ack), ['args' => Util::toStr($args)]);
+
+            return $this->engine->ack($packet, $args);
+        }
+    }
+
+    /**
+     * Gets the engine used, for more advanced functions.
+     *
+     * @return \ElephantIO\Engine\EngineInterface
      */
     public function getEngine()
     {
         return $this->engine;
+    }
+
+    /**
+     * Create socket.io engine.
+     *
+     * @param int $version
+     * @param string $url
+     * @param array $options
+     * @throws \InvalidArgumentException
+     * @return \ElephantIO\Engine\SocketIO
+     */
+    public static function engine($version, $url, $options = [])
+    {
+        switch ($version) {
+            case static::CLIENT_0X:
+                return new Version0X($url, $options);
+            case static::CLIENT_1X:
+                return new Version1X($url, $options);
+            case static::CLIENT_2X:
+                return new Version2X($url, $options);
+            case static::CLIENT_3X:
+                return new Version3X($url, $options);
+            case static::CLIENT_4X:
+                return new Version4X($url, $options);
+            default:
+                throw new InvalidArgumentException(sprintf('Unknown engine version %d!', $version));
+        }
+    }
+
+    /**
+     * Create socket client.
+     *
+     * Available options:
+     * - client: client version
+     * - logger: a Psr\Log\LoggerInterface instance
+     *
+     * Options not listed above will be passed to engine.
+     *
+     * @param string $url
+     * @param array $options
+     * @throws \InvalidArgumentException
+     * @return \ElephantIO\Client
+     */
+    public static function create($url, $options = [])
+    {
+        $version = isset($options['client']) ? $options['client'] : static::CLIENT_4X;
+        $logger = isset($options['logger']) ? $options['logger'] : null;
+        unset($options['client'], $options['logger']);
+
+        return new self(static::engine($version, $url, $options), $logger);
     }
 }
