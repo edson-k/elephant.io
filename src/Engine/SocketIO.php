@@ -248,7 +248,7 @@ abstract class SocketIO implements EngineInterface, SocketInterface
     }
 
     /** {@inheritDoc} */
-    public function emit($event, array $args, $ack = null)
+    public function emit($event, $args, $ack = null)
     {
         list($proto, $data, $raws) = $this->createEvent($event, $args, $ack);
 
